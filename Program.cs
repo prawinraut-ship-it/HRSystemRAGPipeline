@@ -1,11 +1,16 @@
-﻿using Azure.AI.Extensions.OpenAI;
-using Azure.AI.Projects;
-using Azure.AI.Projects.Agents;
-using Azure.Identity;
+﻿﻿using Azure.AI.Projects;
 using Microsoft.Extensions.Configuration;
+using Azure.Identity;
+using System.ClientModel;
+using Azure.AI.Projects.Agents;
 using OpenAI.Responses;
+using Azure.AI.Extensions.OpenAI;
 using OpenAI.VectorStores;
 using OpenAI.Files;
+using System.Text.Json.Nodes;
+using System.Text.Json;
+using System.Text;
+
 
 
 #pragma warning disable OPENAI001
@@ -45,9 +50,58 @@ AIProjectClient projectClient = new(
     tokenProvider: new DefaultAzureCredential()
 );
 
-var agentDefinition = new DeclarativeAgentDefinition(model: modelDeployment)
+
+
+string pdfFolder = Path.Combine(Directory.GetCurrentDirectory(), "PolicyDocuments");
+VectorStoreClient vctStoreClient = projectClient.ProjectOpenAIClient.GetVectorStoreClient();
+var store = vctStoreClient.GetVectorStores().FirstOrDefault(s => s.Name == "policy-documents-vectorstore");
+VectorStore vectorStore = store;
+
+if (!skipKnowledgeConfiguration)
 {
-    Instructions = @"
+
+    List<string> fileIds = new List<string>() { };
+
+    Console.WriteLine("Uploading files to the Foundry...\n");
+
+    var files = await projectClient.ProjectOpenAIClient.GetProjectFilesClient().GetFilesAsync(FilePurpose.Assistants);
+    foreach (string filePath in Directory.EnumerateFiles(pdfFolder, "*", SearchOption.AllDirectories))
+    {
+        string fileName = Path.GetFileName(filePath);
+        byte[] fileBytes = await File.ReadAllBytesAsync(filePath);
+        BinaryData fileData = new BinaryData(fileBytes);
+        var fileId = files.Value.FirstOrDefault(f => f.Filename == fileName)?.Id;
+        if (!string.IsNullOrEmpty(fileId))
+        {
+            _ = await projectClient.ProjectOpenAIClient.GetProjectFilesClient().DeleteFileAsync(fileId);
+        }
+        OpenAIFile uploadedFile = await projectClient.ProjectOpenAIClient.GetProjectFilesClient().UploadFileAsync(fileData, fileName, FileUploadPurpose.Assistants);
+        fileIds.Add(uploadedFile.Id);
+        Console.WriteLine($"File uploaded: {fileName}");
+
+
+        Console.WriteLine("Files uploaded successfully...\n");
+    }
+
+    // Create the VectorStore and provide it with uploaded file ID.
+
+    if (store != null)
+    {
+        Console.WriteLine("Vector store already exists. Deleting existing vector store...\n");
+        await vctStoreClient.DeleteVectorStoreAsync(store.Id);
+    }
+    VectorStoreCreationOptions options = new()
+    {
+        Name = "policy-documents-vectorstore",
+    };
+    vectorStore = await vctStoreClient.CreateVectorStoreAsync(options: options);
+    await vctStoreClient.AddFileBatchToVectorStoreAsync(vectorStore.Id, fileIds);
+
+    Console.WriteLine("Vector store created and files added to vector store...\n");
+
+    var agentDefinition = new DeclarativeAgentDefinition(model: modelDeployment)
+    {
+        Instructions = @"
 You are a helpful Human Resources agent for Cobalt Ridge Systems.
 
 - Answer ONLY using retrieved HR policy documents
@@ -65,65 +119,21 @@ If no data found:
 If outside HR scope:
 Politely refuse
 ",
-    Tools = {  }
-};
-
-// Create the agent version in the project. Run it once only
-var agentVersion = projectClient.AgentAdministrationClient.CreateAgentVersion(
-    agentName: agentName,
-    options: new ProjectsAgentVersionCreationOptions(agentDefinition)
-);
-
-
-
-// Create the AI project client
-var client = new AIProjectClient(new Uri(projectEndpoint), new DefaultAzureCredential());
-
-string pdfFolder = Path.Combine(Directory.GetCurrentDirectory(), "PolicyDocuments");
-VectorStoreClient vctStoreClient = client.ProjectOpenAIClient.GetVectorStoreClient();
-var store = vctStoreClient.GetVectorStores().FirstOrDefault(s => s.Name == "hr-policy-documents-vectorstore");
-VectorStore vectorStore = store;
-
-if (!skipKnowledgeConfiguration)
-{
-
-    List<string> fileIds = new List<string>() { };
-
-    Console.WriteLine("Uploading files to the Foundry...\n");
-
-    var files = await client.ProjectOpenAIClient.GetProjectFilesClient().GetFilesAsync(FilePurpose.Assistants);
-    foreach (string filePath in Directory.EnumerateFiles(pdfFolder, "*", SearchOption.AllDirectories))
-    {
-        string fileName = Path.GetFileName(filePath);
-        byte[] fileBytes = await File.ReadAllBytesAsync(filePath);
-        BinaryData fileData = new BinaryData(fileBytes);
-        var fileId = files.Value.FirstOrDefault(f => f.Filename == fileName)?.Id;
-        if (!string.IsNullOrEmpty(fileId))
-        {
-            _ = await client.ProjectOpenAIClient.GetProjectFilesClient().DeleteFileAsync(fileId);
-        }
-        OpenAIFile uploadedFile = await client.ProjectOpenAIClient.GetProjectFilesClient().UploadFileAsync(fileData, fileName, FileUploadPurpose.Assistants);
-        fileIds.Add(uploadedFile.Id);
-        Console.WriteLine($"File uploaded: {fileName}");
-
-
-        Console.WriteLine("Files uploaded successfully...\n");
-    }
-
-    // Create the VectorStore and provide it with uploaded file ID.
-
-    if (store != null)
-    {
-        Console.WriteLine("Vector store already exists. Deleting existing vector store...\n");
-        await vctStoreClient.DeleteVectorStoreAsync(store.Id);
-    }
-    VectorStoreCreationOptions options = new()
-    {
-        Name = "hr-policy-documents-vectorstore",
+        Tools = {
+                    ResponseTool.CreateFileSearchTool(new List<string> { vectorStore.Id }, 12),
+                    CitationBuilder.FormatCitationTool
+                }
     };
-    vectorStore = await vctStoreClient.CreateVectorStoreAsync(options: options);
-    await vctStoreClient.AddFileBatchToVectorStoreAsync(vectorStore.Id, fileIds);
 
-    Console.WriteLine("Vector store created and files added to vector store...\n");
+    // Create the agent version in the project. Run it once only
+    var agentVersion = projectClient.AgentAdministrationClient.CreateAgentVersion(
+        agentName: agentName,
+        options: new ProjectsAgentVersionCreationOptions(agentDefinition)
+    );
+
+    Console.WriteLine("Agent version created/updated...\n");
 }
 
+
+
+  
