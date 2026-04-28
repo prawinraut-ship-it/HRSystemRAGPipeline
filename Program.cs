@@ -132,8 +132,102 @@ Politely refuse
     );
 
     Console.WriteLine("Agent version created/updated...\n");
+
+}
+
+Console.WriteLine("Do you want to interact with the agent?\n");
+Console.WriteLine("Type 'Yes' to start the conversation or 'No' to exit.");
+string? startConversationInput = Console.ReadLine();
+if (string.IsNullOrWhiteSpace(startConversationInput) ||
+    !startConversationInput.Trim().Equals("Yes", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("Exiting the application. Goodbye!");
+    return;
+}
+
+Console.WriteLine("Agent is being prepared, please wait...\n");
+// Create the conversation to store responses.
+ClientResult<ProjectConversation> conversationResult = projectClient.ProjectOpenAIClient.GetProjectConversationsClient().CreateProjectConversation();
+CreateResponseOptions responseOptions = new CreateResponseOptions()
+{
+    Agent = new AgentReference("policyassistant", "1"),
+    AgentConversationId = conversationResult.Value.Id,
+    StreamingEnabled = true,
+};
+
+Console.WriteLine("Virtual HR Agent is ready! Type 'Quit' or 'Exit' to end the conversation.\n");
+
+// Main conversation loop
+while (true)
+{
+    Console.Write("You: ");
+    string? userInput = Console.ReadLine();
+
+    if (string.IsNullOrWhiteSpace(userInput))
+        continue;
+
+    // Check for exit conditions
+    if (userInput.Trim().Equals("Quit", StringComparison.OrdinalIgnoreCase) ||
+        userInput.Trim().Equals("Exit", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine("Goodbye!");
+        break;
+    }
+
+    // Send the user message and get streaming response
+    responseOptions.InputItems.Clear();
+    responseOptions.InputItems.Add(ResponseItem.CreateUserMessageItem(userInput));
+
+    Console.Write("\nAgent: ");
+    List<string> citations = new List<string>();
+    // Loop to handle multiple function calls (e.g., multiple citations)
+    while (true)
+    {
+        List<ResponseItem> inputItems = new List<ResponseItem>();
+        bool functionCalled = false;
+
+        foreach (StreamingResponseUpdate streamResponse in projectClient.ProjectOpenAIClient.GetResponsesClient().CreateResponseStreaming(responseOptions))
+        {
+            if (streamResponse is StreamingResponseOutputItemDoneUpdate itemDoneUpdate)
+            {
+                if (itemDoneUpdate.Item is FunctionCallResponseItem functionToolCall)
+                {
+                    var functionOutputItem = CitationBuilder.GetResolvedToolOutput(functionToolCall);
+
+                    if (functionOutputItem != null)
+                    {
+                        inputItems.Add(functionOutputItem);
+                        citations.Add(functionOutputItem.FunctionOutput);
+                        functionCalled = true;
+                    }
+                }
+            }
+
+           // ParseResponse(streamResponse);
+        }
+
+        // If function was called, submit the output and loop again
+        if (functionCalled)
+        {
+            responseOptions.InputItems.Clear();
+            foreach (var inputItem in inputItems)
+            {
+                responseOptions.InputItems.Add(inputItem);
+            }
+        }
+        else
+        {
+            // No more function calls, break the loop
+            break;
+        }
+    }
+    foreach (var citation in citations)
+    {
+        Console.WriteLine($"\n{citation}");
+    }
 }
 
 
 
-  
+
+
