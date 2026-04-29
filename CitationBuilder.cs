@@ -117,12 +117,15 @@ public static class CitationBuilder
             string documentName = root.GetProperty("documentName").GetString();
             string chunkText = root.GetProperty("chunkText").GetString();
 
-            // Extract optional parameters
+            // Extract optional parameters                       
             int? pageNumber = null;
-            if (root.TryGetProperty("pageNumber", out JsonElement pageElement))
+
+            if (root.TryGetProperty("pageNumber", out JsonElement pageElement) &&
+               pageElement.ValueKind == JsonValueKind.Number)
             {
-                pageNumber = pageElement.GetInt32();
+               pageNumber = pageElement.GetInt32();
             }
+
 
             string section = null;
             if (root.TryGetProperty("section", out JsonElement sectionElement))
