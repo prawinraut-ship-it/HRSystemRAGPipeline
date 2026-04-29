@@ -204,6 +204,15 @@ while (true)
             }
 
            // ParseResponse(streamResponse);
+
+           if (streamResponse is StreamingResponseOutputTextDeltaUpdate textDelta)
+            {
+                Console.Write($"{textDelta.Delta}");
+            }
+            else if (streamResponse is StreamingResponseErrorUpdate errorUpdate)
+            {
+                throw new InvalidOperationException($"The stream has failed with the error: {errorUpdate.Message}");
+            }
         }
 
         // If function was called, submit the output and loop again
@@ -226,6 +235,8 @@ while (true)
         Console.WriteLine($"\n{citation}");
     }
 }
+
+ 
 
 
 
